@@ -1,8 +1,11 @@
 @page "/profile"
 @using WebApp.Models
 @using WebApp.Services
+@using Microsoft.AspNetCore.Authorization
 @inject GoalsService GoalsService
+@inject UserService UserService
 @inject IConfiguration Configuration
+@attribute [Authorize]
 
 <PageTitle>Profile - LifeTrack</PageTitle>
 
@@ -17,6 +20,10 @@
                 <i class="bi bi-person-circle" style="font-size: 4rem; color: #58CC02;"></i>
             </div>
             <h3>@currentUser.Username</h3>
+            @if (!string.IsNullOrEmpty(currentUser.Email))
+            {
+                <p class="text-muted">@currentUser.Email</p>
+            }
             <div class="level-badge">
                 Level @currentUser.Level
             </div>
@@ -272,10 +279,12 @@
     private string azureStatusMessage = "";
     private bool isAzureConnected = false;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         categories = GoalsService.GetCategories();
-        currentUser = GoalsService.GetCurrentUser();
+        
+        // Get user details from the UserService which integrates Azure AD information
+        currentUser = await UserService.GetCurrentUserAsync();
         editUsername = currentUser.Username;
         
         // Calculate statistics

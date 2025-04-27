@@ -1,4 +1,27 @@
 ﻿@inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@inject NavigationManager Navigation
+@inject SignOutSessionStateManager SignOutManager
+
+<AuthorizeView>
+    <Authorized>
+        <div class="top-bar">
+            <div class="user-info">
+                <span>Hello, @context.User.Identity?.Name!</span>
+            </div>
+            <button class="btn btn-link" @onclick="BeginLogout">Logout</button>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="top-bar">
+            <div class="user-info">
+                <span>Not signed in</span>
+            </div>
+            <button class="btn btn-link" @onclick="BeginLogin">Login</button>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
 
 <main>
     @Body
@@ -18,3 +41,16 @@
         <span>Profile</span>
     </NavLink>
 </div>
+
+@code {
+    private void BeginLogin()
+    {
+        Navigation.NavigateToLogin("authentication/login");
+    }
+
+    private async Task BeginLogout()
+    {
+        await SignOutManager.SetSignOutState();
+        Navigation.NavigateToLogout("authentication/logout");
+    }
+}

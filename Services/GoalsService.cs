@@ -8,22 +8,70 @@ public class GoalsService
     private List<Category> _categories = new();
     private User _currentUser = new();
     private readonly ILogger<GoalsService> _logger;
-    private readonly AzureStorageService _storageService;
+    private readonly AzureStorageService? _storageService;
+    private bool _useAzureStorage = true;
+    private string _userIdentifier = "default"; // Will be updated with Azure AD user identifier
 
     // Constants for gamification
     private const int BALANCE_THRESHOLD = 1; // Minimum goals completed in each category to get balance bonus
     private const int BALANCE_BONUS_POINTS = 50;
     private const int STREAK_BONUS = 10; // Points per day of streak
 
-    // Azure storage file names
-    private const string CATEGORIES_FILENAME = "categories.json";
-    private const string USER_FILENAME = "user.json";
+    // Azure storage file name patterns
+    private const string CATEGORIES_FILENAME_PATTERN = "categories_{0}.json"; // {0} will be user identifier
+    private const string USER_FILENAME_PATTERN = "user_{0}.json"; // {0} will be user identifier
 
-    public GoalsService(ILogger<GoalsService> logger, AzureStorageService storageService)
+    public GoalsService(ILogger<GoalsService> logger, IServiceProvider serviceProvider)
     {
         _logger = logger;
-        _storageService = storageService;
+        
+        // Try to get the storage service, but don't fail if it's not available or properly configured
+        try
+        {
+            _storageService = serviceProvider.GetService(typeof(AzureStorageService)) as AzureStorageService;
+            if (_storageService == null)
+            {
+                _useAzureStorage = false;
+                _logger.LogWarning("AzureStorageService is not available. Using local storage.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _useAzureStorage = false;
+            _logger.LogWarning(ex, "Error initializing AzureStorageService. Using local storage.");
+        }
+        
         InitializeDataAsync().ConfigureAwait(false);
+    }
+
+    // Set the user identifier from Azure AD to be used in file paths
+    public void SetUserIdentifier(string userId)
+    {
+        if (!string.IsNullOrEmpty(userId) && userId != _userIdentifier)
+        {
+            _logger.LogInformation($"Changing user identifier from {_userIdentifier} to {userId}");
+            _userIdentifier = userId;
+            
+            // Load user-specific data
+            InitializeDataAsync().ConfigureAwait(false);
+        }
+    }
+
+    // Update user information from Azure AD
+    public void UpdateUser(User user)
+    {
+        if (user != null)
+        {
+            _currentUser = user;
+            
+            // If user has an Azure AD ObjectId, use it as the user identifier
+            if (!string.IsNullOrEmpty(user.ObjectId))
+            {
+                SetUserIdentifier(user.ObjectId);
+            }
+            
+            SaveDataAsync().ConfigureAwait(false);
+        }
     }
 
     public List<Category> GetCategories() => _categories;
@@ -198,12 +246,33 @@ public class GoalsService
     {
         try
         {
-            await LoadFromAzureStorageAsync();
-
-            // If no data loaded, initialize with default data
-            if (_categories.Count == 0)
+            bool dataLoaded = false;
+            
+            // Try to load data from Azure Storage first, if available
+            if (_useAzureStorage && _storageService != null)
             {
-                await InitializeFromGoalsFileAsync();
+                try
+                {
+                    dataLoaded = await LoadFromAzureStorageAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error loading data from Azure Storage. Falling back to local storage.");
+                    _useAzureStorage = false; // Disable Azure Storage for future operations
+                }
+            }
+            
+            // If no Azure data or Azure Storage isn't available, try localStorage or defaults
+            if (!dataLoaded)
+            {
+                // Try to load from localStorage
+                LoadFromLocalStorageFallback();
+                
+                // If still no data, try to load from goals.txt or use defaults
+                if (_categories.Count == 0)
+                {
+                    await InitializeFromGoalsFileAsync();
+                }
             }
 
             // Initialize user if not loaded
@@ -220,7 +289,7 @@ public class GoalsService
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error initializing data: {ex.Message}");
+            _logger.LogError(ex, "Error initializing data. Using default data.");
             await InitializeWithDefaultDataAsync();
         }
     }
@@ -279,7 +348,7 @@ public class GoalsService
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error reading goals.txt: {ex.Message}");
+            _logger.LogError(ex, "Error reading goals.txt. Using default data.");
             await InitializeWithDefaultDataAsync();
         }
     }
@@ -399,64 +468,92 @@ public class GoalsService
         };
     }
 
+    // Get user-specific filenames for Azure Storage
+    private string GetCategoriesFilename() => string.Format(CATEGORIES_FILENAME_PATTERN, _userIdentifier);
+    private string GetUserFilename() => string.Format(USER_FILENAME_PATTERN, _userIdentifier);
+
     // Save data to Azure Storage
     private async Task SaveDataAsync()
     {
         try
         {
-            // Save categories to Azure Storage
-            await _storageService.SaveDataAsync(CATEGORIES_FILENAME, _categories);
+            if (_useAzureStorage && _storageService != null)
+            {
+                try
+                {
+                    // Save categories to Azure Storage with user-specific filename
+                    await _storageService.SaveDataAsync(GetCategoriesFilename(), _categories);
+                    
+                    // Save user data to Azure Storage with user-specific filename
+                    await _storageService.SaveDataAsync(GetUserFilename(), _currentUser);
+                    
+                    _logger.LogInformation($"Data saved to Azure Storage for user {_userIdentifier}");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error saving data to Azure Storage. Falling back to local storage.");
+                    _useAzureStorage = false; // Disable Azure Storage for future operations
+                }
+            }
             
-            // Save user data to Azure Storage
-            await _storageService.SaveDataAsync(USER_FILENAME, _currentUser);
-            
-            _logger.LogInformation("Data saved to Azure Storage");
+            // Fallback to local storage
+            SaveToLocalStorageFallback();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error saving data to Azure Storage");
-            SaveToLocalStorageFallback();
+            _logger.LogError(ex, "Error saving data");
         }
     }
 
     // Load data from Azure Storage
-    private async Task LoadFromAzureStorageAsync()
+    private async Task<bool> LoadFromAzureStorageAsync()
     {
+        if (!_useAzureStorage || _storageService == null)
+            return false;
+            
+        bool dataLoaded = false;
+        
         try
         {
-            // Load categories from Azure Storage
-            var categories = await _storageService.GetDataAsync<List<Category>>(CATEGORIES_FILENAME);
+            // Load categories from Azure Storage using user-specific filename
+            var categories = await _storageService.GetDataAsync<List<Category>>(GetCategoriesFilename());
             if (categories != null && categories.Count > 0)
             {
                 _categories = categories;
-                _logger.LogInformation("Categories loaded from Azure Storage");
+                _logger.LogInformation($"Categories loaded from Azure Storage for user {_userIdentifier}");
+                dataLoaded = true;
             }
             
-            // Load user data from Azure Storage
-            var user = await _storageService.GetDataAsync<User>(USER_FILENAME);
+            // Load user data from Azure Storage using user-specific filename
+            var user = await _storageService.GetDataAsync<User>(GetUserFilename());
             if (user != null)
             {
                 _currentUser = user;
-                _logger.LogInformation("User data loaded from Azure Storage");
+                _logger.LogInformation($"User data loaded from Azure Storage for user {_userIdentifier}");
+                dataLoaded = true;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error loading data from Azure Storage");
-            LoadFromLocalStorageFallback();
+            throw;
         }
+        
+        return dataLoaded;
     }
 
     // Fallback methods for when Azure Storage is unavailable
     private void SaveToLocalStorageFallback()
     {
-        // In a real app, we could save to browser's localStorage or IndexedDB
-        _logger.LogInformation("Using local storage fallback for saving data");
+        _logger.LogInformation($"Using local storage fallback for saving data for user {_userIdentifier}");
+        // In a real browser app, we would implement localStorage saving here
+        // For now, we'll just log that we would save
     }
 
     private void LoadFromLocalStorageFallback()
     {
-        // In a real app, we would load from browser's localStorage or IndexedDB
-        _logger.LogInformation("Using local storage fallback for loading data");
+        _logger.LogInformation($"Using local storage fallback for loading data for user {_userIdentifier}");
+        // In a real browser app, we would implement localStorage loading here
     }
 }

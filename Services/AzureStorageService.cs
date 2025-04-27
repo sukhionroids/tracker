@@ -2,6 +2,7 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace WebApp.Services;
 
@@ -17,26 +18,79 @@ public class AzureStorageService
     {
         _logger = logger;
         
+        string directEnvVar = Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING")??String.Empty;
+
+        if (!string.IsNullOrEmpty(directEnvVar))
+        {
+            _logger.LogInformation("using conn string from direct env var");
+            _connectionString = directEnvVar;
+        }
+        else{
         // Get connection string from configuration
-        _connectionString = configuration.GetValue<string>("AzureStorage:ConnectionString") ?? 
+        string configConnectionString = configuration.GetValue<string>("AzureStorage:ConnectionString") ?? 
             "UseDevelopmentStorage=true"; // Use local storage emulator if not configured
+        
+        // Process potential environment variables
+        _connectionString = ProcessEnvironmentVariables(configConnectionString);
+        }
         
         _containerName = configuration.GetValue<string>("AzureStorage:ContainerName") ?? "lifetrack-data";
         
         // Initialize the clients
         try
         {
+            _logger.LogInformation("Initializing Azure Blob Storage with container: {ContainerName}", _containerName);
+            
+            // Add fallback mechanism to handle missing connection string in production
+            if (string.IsNullOrWhiteSpace(_connectionString) || _connectionString.Contains("%AZURE_STORAGE_CONNECTION_STRING%"))
+            {
+                _logger.LogWarning("Azure Storage connection string not configured. Using local storage fallback.");
+                throw new InvalidOperationException("Azure Storage connection string not properly configured");
+            }
+            
             _blobServiceClient = new BlobServiceClient(_connectionString);
             _containerClient = _blobServiceClient.GetBlobContainerClient(_containerName);
             
             // Create the container if it doesn't exist
             _containerClient.CreateIfNotExists(PublicAccessType.None);
+            _logger.LogInformation("Azure Blob Storage initialized successfully");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error initializing Azure Blob Storage");
             throw;
         }
+    }
+
+    // Helper method to process environment variables in the connection string
+    private string ProcessEnvironmentVariables(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return input;
+            
+        // Check if the string contains environment variable pattern %VARIABLE_NAME%
+        var matches = Regex.Matches(input, @"%([^%]+)%");
+        
+        if (matches.Count > 0)
+        {
+            foreach (Match match in matches.Cast<Match>())
+            {
+                string envVarName = match.Groups[1].Value;
+                string envVarValue = Environment.GetEnvironmentVariable(envVarName) ?? string.Empty;
+                
+                if (!string.IsNullOrEmpty(envVarValue))
+                {
+                    _logger.LogInformation("Replacing environment variable placeholder in connection string: {EnvVarName}", envVarName);
+                    input = input.Replace(match.Value, envVarValue);
+                }
+                else
+                {
+                    _logger.LogWarning("Environment variable not found: {EnvVarName}", envVarName);
+                }
+            }
+        }
+        
+        return input;
     }
 
     public async Task<T?> GetDataAsync<T>(string fileName)
