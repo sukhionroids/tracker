@@ -1,0 +1,226 @@
+﻿@page "/"
+@using WebApp.Models
+@using WebApp.Services
+@inject GoalsService GoalsService
+
+<PageTitle>LifeTrack - Goal Tracker</PageTitle>
+
+<div class="dashboard-header">
+    <h2>LifeTrack</h2>
+    <div class="user-stats">
+        <div class="stat-item">
+            <div class="stat-value">@currentUser.Level</div>
+            <div class="stat-label">Level</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">@currentUser.TotalPoints</div>
+            <div class="stat-label">Points</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">@currentUser.ConsistencyStreak</div>
+            <div class="stat-label">Day Streak</div>
+        </div>
+    </div>
+    <div class="progress-bar-container">
+        <div class="progress-bar" style="width: @GetLevelProgressPercentage()%"></div>
+    </div>
+</div>
+
+<div class="container page-padding">
+    @if (HasBalanceToday())
+    {
+        <div class="balance-bonus">
+            <div class="balance-bonus-text">
+                <div>Balance Bonus Today!</div>
+                <small>You completed tasks in all categories</small>
+            </div>
+            <div class="balance-bonus-points">+50</div>
+        </div>
+    }
+
+    @foreach (var category in categories)
+    {
+        <div class="category-card">
+            <div class="category-header" style="background-color: @category.Color">
+                <h3><i class="bi @category.Icon"></i> @category.Name</h3>
+                @if (category.CompletionStreak > 0)
+                {
+                    <div class="streak-badge">
+                        <i class="bi bi-fire"></i> @category.CompletionStreak @(category.CompletionStreak == 1 ? "day" : "days")
+                    </div>
+                }
+            </div>
+            <div class="category-body">
+                @foreach (var goal in category.Goals)
+                {
+                    <div class="goal-item @(goal.IsCompleted && goal.CompletedDate?.Date == DateTime.Now.Date ? "completed" : "")" @onclick="() => ToggleGoalCompletionAsync(category.Id, goal.Id)">
+                        <div class="goal-checkbox @(goal.IsCompleted && goal.CompletedDate?.Date == DateTime.Now.Date ? "checked" : "")">
+                            @if (goal.IsCompleted && goal.CompletedDate?.Date == DateTime.Now.Date)
+                            {
+                                <i class="bi bi-check"></i>
+                            }
+                        </div>
+                        <span>@goal.Description</span>
+                        <span class="goal-difficulty @GetDifficultyClass(goal.Difficulty)">@goal.Points XP</span>
+                    </div>
+                }
+                <button class="btn btn-sm btn-outline-primary w-100 mt-2" @onclick="() => OpenAddGoalModal(category.Id)">
+                    <i class="bi bi-plus"></i> Add Goal
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (isLoading)
+    {
+        <div class="text-center mt-4">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Syncing with Azure Storage...</p>
+        </div>
+    }
+</div>
+
+@if (showAddGoalModal)
+{
+    <div class="modal fade show" style="display:block" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Add New Goal</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAddGoalModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group mb-3">
+                        <label for="goalDescription">Description</label>
+                        <input type="text" class="form-control" id="goalDescription" @bind="newGoalDescription" placeholder="Enter goal description" />
+                    </div>
+                    <div class="form-group mb-3">
+                        <label for="goalDifficulty">Difficulty</label>
+                        <select class="form-control" id="goalDifficulty" @bind="newGoalDifficulty">
+                            <option value="Easy">Easy (5 XP)</option>
+                            <option value="Normal" selected>Normal (10 XP)</option>
+                            <option value="Hard">Hard (20 XP)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseAddGoalModal">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="AddGoalAsync">Add Goal</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private List<Category> categories = new();
+    private User currentUser = new();
+    private bool showAddGoalModal = false;
+    private int currentCategoryId;
+    private string newGoalDescription = "";
+    private string newGoalDifficulty = "Normal";
+    private bool isLoading = false;
+
+    protected override void OnInitialized()
+    {
+        categories = GoalsService.GetCategories();
+        currentUser = GoalsService.GetCurrentUser();
+    }
+
+    private async Task ToggleGoalCompletionAsync(int categoryId, int goalId)
+    {
+        var category = categories.FirstOrDefault(c => c.Id == categoryId);
+        if (category == null) return;
+
+        var goal = category.Goals.FirstOrDefault(g => g.Id == goalId);
+        if (goal == null) return;
+
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            if (goal.IsCompleted && goal.CompletedDate?.Date == DateTime.Now.Date)
+            {
+                await GoalsService.ResetGoalAsync(categoryId, goalId);
+            }
+            else
+            {
+                await GoalsService.CompleteGoalAsync(categoryId, goalId);
+            }
+
+            // Refresh data
+            categories = GoalsService.GetCategories();
+            currentUser = GoalsService.GetCurrentUser();
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private string GetDifficultyClass(string difficulty)
+    {
+        return difficulty switch
+        {
+            "Easy" => "difficulty-easy",
+            "Normal" => "difficulty-normal",
+            "Hard" => "difficulty-hard",
+            _ => "difficulty-normal"
+        };
+    }
+
+    private int GetLevelProgressPercentage()
+    {
+        int pointsForNextLevel = currentUser.Level * 100;
+        int pointsInCurrentLevel = currentUser.TotalPoints % 100;
+        return (pointsInCurrentLevel * 100) / 100;
+    }
+
+    private bool HasBalanceToday()
+    {
+        // Check if all categories have at least one goal completed today
+        return categories.All(c => 
+            c.Goals.Any(g => 
+                g.IsCompleted && 
+                g.CompletedDate?.Date == DateTime.Now.Date));
+    }
+
+    private void OpenAddGoalModal(int categoryId)
+    {
+        currentCategoryId = categoryId;
+        showAddGoalModal = true;
+        newGoalDescription = "";
+        newGoalDifficulty = "Normal";
+    }
+
+    private void CloseAddGoalModal()
+    {
+        showAddGoalModal = false;
+    }
+
+    private async Task AddGoalAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(newGoalDescription))
+        {
+            isLoading = true;
+            StateHasChanged();
+
+            try
+            {
+                await GoalsService.AddGoalAsync(currentCategoryId, newGoalDescription, newGoalDifficulty);
+                categories = GoalsService.GetCategories();
+                CloseAddGoalModal();
+            }
+            finally
+            {
+                isLoading = false;
+                StateHasChanged();
+            }
+        }
+    }
+}

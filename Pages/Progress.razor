@@ -1,0 +1,149 @@
+@page "/progress"
+@using WebApp.Models
+@using WebApp.Services
+@inject GoalsService GoalsService
+
+<PageTitle>Progress - LifeTrack</PageTitle>
+
+<div class="dashboard-header">
+    <h2><i class="bi bi-bar-chart"></i> Your Progress</h2>
+    <div class="user-stats">
+        <div class="stat-item">
+            <div class="stat-value">@completedGoalsCount</div>
+            <div class="stat-label">Completed</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">@goalCompletionRate%</div>
+            <div class="stat-label">Completion Rate</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value">@balanceBonusCount</div>
+            <div class="stat-label">Balance Bonuses</div>
+        </div>
+    </div>
+</div>
+
+<div class="container page-padding">
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Consistency Streak</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex align-items-center">
+                <div style="font-size: 2.5rem; color: #FFD900; margin-right: 15px;">
+                    <i class="bi bi-fire"></i>
+                </div>
+                <div>
+                    <h3 class="mb-0">@currentUser.ConsistencyStreak @(currentUser.ConsistencyStreak == 1 ? "day" : "days")</h3>
+                    <p class="text-muted mb-0">Keep going to earn more streak bonuses!</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Category Performance</h5>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                @foreach (var category in categories)
+                {
+                    <div class="col-12 mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span><i class="bi @category.Icon" style="color: @category.Color"></i> @category.Name</span>
+                            <span>@GetCategoryCompletionRate(category)%</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" style="width: @GetCategoryCompletionRate(category)%; background-color: @category.Color" 
+                                 aria-valuenow="@GetCategoryCompletionRate(category)" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h5 class="mb-0">Weekly Activity</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between mb-3">
+                @foreach (var day in GetLastSevenDays())
+                {
+                    <div class="text-center">
+                        <div class="activity-dot @(IsDateActive(day) ? "active" : "")" title="@day.ToString("MMM dd")"></div>
+                        <div class="small">@day.ToString("ddd")[0]</div>
+                    </div>
+                }
+            </div>
+            <p class="text-center text-muted mb-0">
+                Your activity for the last 7 days
+            </p>
+        </div>
+    </div>
+</div>
+
+<style>
+    .activity-dot {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background-color: #e0e0e0;
+        margin: 0 auto 5px;
+    }
+    .activity-dot.active {
+        background-color: #58CC02;
+    }
+</style>
+
+@code {
+    private List<Category> categories = new();
+    private User currentUser = new();
+    private int completedGoalsCount = 0;
+    private int totalGoalsCount = 0;
+    private int goalCompletionRate = 0;
+    private int balanceBonusCount = 0;
+    
+    protected override void OnInitialized()
+    {
+        categories = GoalsService.GetCategories();
+        currentUser = GoalsService.GetCurrentUser();
+        
+        // Calculate statistics
+        completedGoalsCount = categories.Sum(c => c.Goals.Count(g => g.IsCompleted));
+        totalGoalsCount = categories.Sum(c => c.Goals.Count);
+        goalCompletionRate = totalGoalsCount > 0 ? (completedGoalsCount * 100) / totalGoalsCount : 0;
+        balanceBonusCount = currentUser.BalanceBonus;
+    }
+
+    private int GetCategoryCompletionRate(Category category)
+    {
+        int completed = category.Goals.Count(g => g.IsCompleted);
+        int total = category.Goals.Count;
+        return total > 0 ? (completed * 100) / total : 0;
+    }
+
+    private List<DateTime> GetLastSevenDays()
+    {
+        List<DateTime> days = new List<DateTime>();
+        for (int i = 6; i >= 0; i--)
+        {
+            days.Add(DateTime.Now.Date.AddDays(-i));
+        }
+        return days;
+    }
+
+    private bool IsDateActive(DateTime date)
+    {
+        // In a real app, we would check if the user completed any goals on this date
+        // For now, let's simulate some random activity
+        if (date.Date == DateTime.Now.Date || date.Date == DateTime.Now.AddDays(-2).Date || 
+            date.Date == DateTime.Now.AddDays(-5).Date)
+        {
+            return true;
+        }
+        return false;
+    }
+}
